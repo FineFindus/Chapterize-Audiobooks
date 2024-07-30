@@ -4,6 +4,7 @@ import re
 import subprocess
 import argparse
 import sys
+from datetime import timedelta
 from typing import Optional, TypeVar
 from pathlib import Path
 from shutil import (
@@ -25,7 +26,7 @@ from rich.progress import (
     TextColumn,
     MofNCompleteColumn
 )
-from vosk import Model, KaldiRecognizer, SetLogLevel
+from faster_whisper import WhisperModel
 
 # Local imports
 from model.models import (
@@ -700,6 +701,16 @@ def split_file(audiobook_path: PathLike,
             progress.update(task, advance=1)
 
 
+def format_timestamp_from_float(seconds: float):
+    # Create a timedelta object
+    td = timedelta(seconds=seconds)
+    hours, remainder = divmod(td.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    milliseconds = td.microseconds // 1000
+    formatted_timestamp = '{:02}:{:02}:{:02},{:03}'.format(hours, minutes, seconds, milliseconds)
+    return formatted_timestamp
+
+
 def generate_timecodes(audiobook_path: PathLike, language: str, model_type: str) -> Path:
     """Generate chapter timecodes using vosk Machine Learning API.
 
@@ -750,24 +761,21 @@ def generate_timecodes(audiobook_path: PathLike, language: str, model_type: str)
         )
         model_path = None
 
-    SetLogLevel(-1)
-    model = Model(lang=language, model_path=str(model_path))
-    rec = KaldiRecognizer(model, sample_rate)
-    rec.SetWords(True)
+    model_size = "tiny.en"
+    model = WhisperModel(model_size, compute_type="float32")
 
-    try:
-        # Convert the file to wav (if needed), and stream output to file
-        with subprocess.Popen([str(ffmpeg), "-loglevel", "quiet", "-i",
-                               audiobook_path,
-                               "-ar", str(sample_rate), "-ac", "1", "-f", "s16le", "-"],
-                              stdout=subprocess.PIPE).stdout as stream:
-            with open(out_file, 'w+') as fp:
-                fp.writelines(rec.SrtResult(stream))
+    # set word_timestamps for ms precision of segements
+    segments, info = model.transcribe(audiobook_path, word_timestamps=True)
 
-        con.print("[bold green]SUCCESS![/] Timecode file created\n")
-    except Exception as e:
-        con.print(f"[bold red]ERROR:[/] Failed to generate timecode file with vosk: [red]{e}[/red]\n")
-        sys.exit(7)
+    with open(out_file, 'w+') as fp:
+        for count, segment in enumerate(segments):
+            start_timestamp = format_timestamp_from_float(segment.start)
+            end_timestamp =format_timestamp_from_float(segment.end)
+            fp.write(f"{str(count+1)}\n")
+            fp.write(f"{start_timestamp} --> {end_timestamp}\n")
+            fp.write(f"{segment.text.strip()}\n")
+            fp.write("\n")
+    con.print("[bold green]SUCCESS![/] Timecode file created\n")
 
     return Path(out_file)
 
