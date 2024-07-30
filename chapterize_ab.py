@@ -100,64 +100,6 @@ def verify_language(language: str) -> str:
         return code
 
 
-def verify_download(language: str, model_type: str) -> str:
-    """Verifies that the selected language can be downloaded by the script.
-
-    If the download option is selected, this function verifies that the language
-    model and size are supported by the script.
-
-    :param language: Language of the model to download.
-    :param model_type: Type of model (small or large).
-    :return: String name of the model file to download if supported.
-    """
-
-    lang_code = verify_language(language)
-    name = ''
-    found = False
-    other = 'small' if model_type == 'large' else 'large'
-
-    if model_type == 'small':
-        for line in models_small:
-            if lang_code in line:
-                name = line
-                break
-    elif model_type == 'large':
-        for line in models_large:
-            if lang_code in line:
-                name = line
-                break
-
-    # If the specified model wasn't found, check for a different size
-    if not name and model_type == 'small':
-        for line in models_large:
-            if lang_code in line:
-                found = True
-                break
-    elif not name and model_type == 'large':
-        for line in models_small:
-            if lang_code in line:
-                found = True
-                break
-
-    if not name and found:
-        con.print(
-            f"[bold yellow]WARNING:[/] The selected model cannot be downloaded for '{language}' "
-            f"in the specified size '{model_type}'. However, a '{other}' model was found. "
-            f"You can re-run the script and choose {other}, or attempt to "
-            f"download a different model manually from {vosk_link}."
-        )
-        sys.exit(3)
-    elif not name:
-        con.print(
-            f"[bold red]ERROR:[/] The selected model cannot be downloaded for '{language}' "
-            f"in size {model_type}. You can try and download a different model manually "
-            f"from {vosk_link}."
-        )
-        sys.exit(33)
-
-    return name
-
-
 def parse_config() -> dict:
     """Parses the toml config file.
 
@@ -209,9 +151,6 @@ def parse_args():
                         type=str, choices=['small', 'large'],
                         help='Model type to use if multiple models are available. Default is small.')
     parser.add_argument('--list_languages', '-ll', action='store_true', help='List supported languages and exit')
-    parser.add_argument('--download_model', '-dm', choices=['small', 'large'], dest='download',
-                        nargs='?', default=argparse.SUPPRESS,
-                        help='Download the model archive specified in the --language parameter')
     parser.add_argument('--cover_art', '-ca', dest='cover_art', nargs='?', default=None,
                         metavar='COVER_ART_PATH', type=path_exists, help='Path to cover art file. Optional')
     parser.add_argument('--author', '-a', dest='author', nargs='?', default=None,
@@ -247,17 +186,6 @@ def parse_args():
         )
         print("\n")
         sys.exit(0)
-
-    if 'download' in args:
-        if args.lang == 'en-us':
-            con.print(
-                "[bold yellow]WARNING:[/] [bold green]--download_model[/] was used, but a language was not set. "
-                "the default value [cyan]'en-us'[/] will be used. If you want a different language, use the "
-                "[bold blue]--language[/] option to specify one."
-            )
-
-        download = 'small' if args.download not in ['small', 'large'] else args.download
-        model_name = verify_download(args.lang, download)
 
 
     # Set ID3 metadata fields based on passed args
@@ -1014,14 +942,6 @@ def main():
         else:
             con.print("[bold yellow]WARNING:[/] Cover art path does not exist")
             cover_art = None
-
-    # Download model if option selected
-    if model_name and lang:
-        con.rule(f"[cyan]Downloading '{lang} ({model_type})' Model[/cyan]")
-        print("\n")
-        con.print("[magenta]Preparing download...[/magenta]")
-        print("\n")
-        download_model(model_name)
 
     # Generate timecodes from mp3 file
     con.rule("[cyan]Generating Timecodes[/cyan]")
