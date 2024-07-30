@@ -609,7 +609,7 @@ def convert_time(time: str) -> str:
         else:
             parts[-1] = str(int(last) - 1)
     except Exception as e:
-        con.print(f"[bold red]CRITICAL:[/] Could not covert end chapter marker for {time}: [red]{e}[/red]")
+        con.print(f"[bold red]CRITICAL:[/] Could not convert end chapter marker for {time}: [red]{e}[/red]")
         sys.exit(6)
 
     return f"{':'.join(parts)}.{milliseconds}"
