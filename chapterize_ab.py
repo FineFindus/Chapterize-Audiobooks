@@ -4,7 +4,7 @@ import re
 import subprocess
 import argparse
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Optional, TypeVar
 from pathlib import Path
 from shutil import (
@@ -115,6 +115,13 @@ def parse_config() -> dict:
         con.print("[bold red]ERROR:[/] Could not locate [blue]defaults.toml[/] file. Did you move or delete it?")
         print("\n")
         return {}
+
+def parse_timestamp(time: str):
+    if '.' not in time:
+        time = time + '.0'
+    parsed_time = datetime.strptime(time, "%H:%M:%S.%f")
+    return timedelta(hours=parsed_time.hour, minutes=parsed_time.minute, seconds=parsed_time.second, microseconds=parsed_time.microsecond)
+
 
 
 '''
@@ -543,7 +550,11 @@ def convert_time(time: str) -> str:
     return f"{':'.join(parts)}.{milliseconds}"
 
 
-def split_file(audiobook_path: PathLike,
+def get_total_duration(input_file):
+    result = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', input_file], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return float(result.stdout)
+
+def apply_chapters(audiobook_path: PathLike,
                timecodes: list[dict],
                metadata: dict,
                cover_art: Optional[str]) -> None:
@@ -557,76 +568,59 @@ def split_file(audiobook_path: PathLike,
     :return: An integer status code
     """
 
+    # add total duration as end timestamp for last chapter
+    timecodes[-1]['end'] = format_timestamp_from_float(get_total_duration(audiobook_path)).replace(',', '.')
+
     file_stem = audiobook_path.stem
     # Set the log path for output. If it exists, generate new filename
-    log_path = audiobook_path.parent.joinpath('ffmpeg_log.txt')
-    if log_path.exists():
-        with open(log_path, 'a+') as fp:
+    metadata_path = audiobook_path.parent.joinpath('FFMETADATAFILE')
+
+    with open(metadata_path, 'w') as fp:
+        fp.write(";FFMETADATA1\n")
+        # Handle metadata strings if they exist
+        if 'album_artist' in metadata:
+            fp.write(f"album_artist={metadata['album_artist']}\n")
+            fp.write(f"artist={metadata['album_artist']}\n")
+        if 'genre' in metadata:
+            fp.write(f"genre={metadata['genre']}\n")
+        if 'album' in metadata:
+            fp.write(f"album={metadata['album']}\n")
+        if 'date' in metadata:
+            fp.write(f"date={metadata['date']}\n")
+        if 'comment' in metadata:
+            fp.write(f"comment={metadata['comment']}\n")
+        if 'description' in metadata:
+            fp.write(f"description={metadata['description']}\n")
+        if 'narrator' in metadata:
+            fp.write(f"composer={metadata['narrator']}\n")
+
+
+        # add all chapters
+        for times in timecodes:
             fp.writelines([
-                '********************************************************\n',
-                'NEW LOG START\n'
-                '********************************************************\n\n'
+                '[CHAPTER]\n',
+                'TIMEBASE=1/1000\n',
+                f"START={parse_timestamp(times['start']).total_seconds() * 1000}\n",
+                f"END={parse_timestamp(times['end']).total_seconds() * 1000}\n",
+                f"TITLE={times['chapter_type']}\n",
             ])
-    command = [ffmpeg, '-y', '-hide_banner', '-loglevel', 'info', '-i', f'{str(audiobook_path)}']
+            fp.write("\n")
+
+    if not metadata_path.exists():
+        con.print("[bold red]ERROR:[/] Failed to create metadata file: ")
+        return
+    command = [ffmpeg, '-y', '-hide_banner', '-loglevel', 'info', '-i', f'{str(audiobook_path)}', '-i', metadata_path]
+    stream = [ '-c', 'copy']
     if cover_art:
-        command.extend(['-i', cover_art, '-id3v2_version', '3', '-metadata:s:v',
+        command.extend(['-i', cover_art, '-map_metadata', '1', '-map', '0', '-map', '2', *stream, '-id3v2_version', '3', '-metadata:s:v',
                         'comment="Cover (front)"'])
-        stream = ['-map', '0:0', '-map', '1:0', '-c', 'copy']
     else:
-        command.extend(['-id3v2_version', '3'])
-        stream = ['-c', 'copy']
+        command.extend(*stream)
 
-    # Handle metadata strings if they exist
-    if 'album_artist' in metadata:
-        command.extend(['-metadata', f"album_artist={metadata['album_artist']}",
-                        '-metadata', f"artist={metadata['album_artist']}"])
-    if 'genre' in metadata:
-        command.extend(['-metadata', f"genre={metadata['genre']}"])
-    if 'album' in metadata:
-        command.extend(['-metadata', f"album={metadata['album']}"])
-    if 'date' in metadata:
-        command.extend(['-metadata', f"date={metadata['date']}"])
-    if 'comment' in metadata:
-        command.extend(['-metadata', f"comment={metadata['comment']}"])
-    if 'description' in metadata:
-        command.extend(['-metadata', f"description={metadata['description']}"])
-    if 'narrator' in metadata:
-        command.extend(['-metadata', f"composer={metadata['narrator']}"])
+    file_path = audiobook_path.parent.joinpath(f"{file_stem} - Chapters.mp3")
+    command.extend([f'{file_path}'])
 
-    progress = build_progress(bar_type='chapterize')
-    with progress:
-        task = progress.add_task('', total=len(timecodes), verb='Processing', noun='Audiobook...')
-        for counter, times in enumerate(timecodes, start=1):
-            counter = f'0{counter}' if counter < 10 else counter
-            command_copy = command.copy()
-            if 'start' in times:
-                command_copy[5:5] = ['-ss', times['start']]
-            if 'end' in times:
-                command_copy[7:7] = ['-to', times['end']]
-            if 'chapter_type' in times:
-                file_path = audiobook_path.parent.joinpath(f"{file_stem} {counter} - {times['chapter_type']}.mp3")
-            else:
-                file_path = audiobook_path.parent.joinpath(f"{file_stem} - {counter}.mp3")
-
-            track_num = ['-metadata', f"track={counter}/{len(timecodes)}"]
-            command_copy.extend([*stream, *track_num, '-metadata', f"title={times['chapter_type']}",
-                                 f'{file_path}'])
-
-            try:
-                with open(log_path, 'a+') as fp:
-                    fp.write('----------------------------------------------------\n\n')
-                    subprocess.run(command_copy, stdout=fp, stderr=fp)
-            except Exception as e:
-                con.print(
-                    f"[bold red]ERROR:[/] An exception occurred writing logs to file: "
-                    f"[red]{e}[/red]\nOutputting to stdout..."
-                )
-                subprocess.run(command_copy, stdout=subprocess.STDOUT)
-
-            # Reset the list but keep reference
-            command_copy = None
-
-            progress.update(task, advance=1)
+    subprocess.run(command)
 
 
 def format_timestamp_from_float(seconds: float):
@@ -783,28 +777,6 @@ def parse_timecodes(srt_content: list, language: str = 'en-us') -> list[dict]:
     else:
         con.print('[bold red]ERROR:[/] Timecodes list cannot be empty. Exiting...')
         sys.exit(8)
-
-
-def verify_count(audiobook_path: PathLike, timecodes: list[dict]) -> None:
-    """Verify that the expected number of files were generated.
-
-    Compares the number of files split from the audiobook to ensure it matches the length of the generated
-    timecodes.
-
-    :param audiobook_path: Path to audiobook file
-    :param timecodes: List of dictionaries containing chapter type, start, and end times
-    :return: None (void)
-    """
-
-    file_count = sum(1 for x in audiobook_path.parent.glob('*.mp3') if x.stem != audiobook_path.stem)
-    expected = len(timecodes)
-    if file_count >= expected:
-        con.print(f"[bold green]SUCCESS![/] Audiobook split into {file_count} files\n")
-    else:
-        con.print(
-            f"[bold yellow]WARNING:[/] {file_count} files were generated "
-            f"which is less than the expected {expected}\n"
-        )
 
 
 def write_cue_file(timecodes: list[dict], cue_path: PathLike) -> bool:
@@ -996,10 +968,7 @@ def main():
     # Split the file
     con.rule("[cyan]Chapterizing File[/cyan]")
     print("\n")
-    split_file(audiobook_file, timecodes, parsed_metadata, cover_art)
-
-    # Count the generated files and compare to timecode dict to ensure they match
-    verify_count(audiobook_file, timecodes)
+    apply_chapters(audiobook_file, timecodes, parsed_metadata, cover_art)
 
 
 if __name__ == '__main__':
