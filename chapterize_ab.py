@@ -819,16 +819,16 @@ def parse_timecodes(srt_content: list, language: str = 'en-us') -> list[dict]:
                 start = start_regexp.group(0).replace(',', '.')
 
                 # Prologue
-                if markers[0] in srt_content[i+1]:
+                if markers[0] in srt_content[i+1] or markers[1] in srt_content[i+1]:
                     chapter_type = markers[0].title()
                 # Chapter X
-                elif markers[1] in srt_content[i+1]:
+                elif markers[2] in srt_content[i+1]:
                     # Add leading zero for better sorting if < 10
                     chapter_count = f'0{counter}' if counter < 10 else f'{counter}'
-                    chapter_type = f'{markers[1].title()} {chapter_count}'
+                    chapter_type = f'{markers[2].title()} {chapter_count}'
                     counter += 1
                 # Epilogue
-                elif markers[2] in srt_content[i+1]:
+                elif markers[3] in srt_content[i+1]:
                     chapter_type = markers[2].title()
                 else:
                     chapter_type = ''
