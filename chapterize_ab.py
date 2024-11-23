@@ -26,7 +26,7 @@ from rich.progress import (
     TextColumn,
     MofNCompleteColumn
 )
-from faster_whisper import WhisperModel
+from faster_whisper import WhisperModel, BatchedInferencePipeline
 
 # Local imports
 from model.models import (
@@ -685,9 +685,10 @@ def generate_timecodes(audiobook_path: PathLike, language: str, model_type: str)
 
     model_size = "tiny.en"
     model = WhisperModel(model_size, compute_type="float32")
+    batched_model = BatchedInferencePipeline(model=model)
 
     # set word_timestamps for ms precision of segements
-    segments, info = model.transcribe(audiobook_path, word_timestamps=True)
+    segments, info = batched_model.transcribe(audiobook_path, word_timestamps=True, batch_size=16)
 
     with open(out_file, 'w+') as fp:
         for count, segment in enumerate(segments):
